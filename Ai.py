@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Professional Mimo AI Telegram Bot
-Compatible + Diagnostic Version
+Mimo AI Telegram Bot
+FINAL WORKING VERSION
 """
 
 import os
@@ -38,6 +38,9 @@ class Config:
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     MIMO_API_KEY = os.getenv("MIMO_AI_API_KEY")
     MIMO_API_URL = os.getenv("MIMO_AI_API_URL")
+
+    # ✅ model مطلوب إجباري
+    MIMO_MODEL = os.getenv("MIMO_MODEL", "mimo-chat")
 
     PORT = int(os.getenv("PORT", 8080))
     PUBLIC_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
@@ -85,9 +88,11 @@ async def call_mimo_ai(user_id: int, prompt: str) -> str:
         "Accept": "application/json"
     }
 
-    # 🧠 أقل Payload ممكن (أعلى توافق)
     payload = {
-        "text": prompt
+        "model": Config.MIMO_MODEL,   # ✅ الحل هنا
+        "prompt": prompt,
+        "max_tokens": 800,
+        "temperature": 0.7
     }
 
     try:
@@ -102,7 +107,6 @@ async def call_mimo_ai(user_id: int, prompt: str) -> str:
                 raw = await resp.text()
                 logger.info(f"MIMO RAW [{resp.status}]: {raw[:300]}")
 
-                # ❌ أي حالة غير 200 نُظهرها بوضوح
                 if resp.status != 200:
                     return (
                         f"❌ Mimo API Error\n"
@@ -110,23 +114,19 @@ async def call_mimo_ai(user_id: int, prompt: str) -> str:
                         f"Response:\n{raw[:500]}"
                     )
 
-                # 🔍 محاولة parsing مرنة
-                try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    return raw
+                data = json.loads(raw)
 
                 reply = (
                     data.get("response")
                     or data.get("result")
                     or data.get("text")
-                    or data.get("answer")
+                    or data.get("choices", [{}])[0].get("text")
                 )
 
                 if not reply:
                     return f"⚠️ API Response:\n{json.dumps(data, ensure_ascii=False, indent=2)[:800]}"
 
-                return reply
+                return reply.strip()
 
     except asyncio.TimeoutError:
         return "⏰ انتهت مهلة الاتصال مع Mimo"
@@ -141,11 +141,11 @@ async def call_mimo_ai(user_id: int, prompt: str) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 **Mimo AI Bot**\n\n"
-        "أرسل أي رسالة وسأرد عليك.\n\n"
+        "جاهز للعمل الآن ✅\n\n"
         "📌 أوامر:\n"
         "/status – حالة النظام\n"
         "/test – اختبار الاتصال\n"
-        "/reset – تصفير الذاكرة",
+        "/reset – تصفير المحادثة",
         parse_mode="Markdown"
     )
 
@@ -154,8 +154,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📊 **Status**\n\n"
         f"🕒 {datetime.now()}\n"
-        f"💬 Memory: {len(memory[uid])}\n"
-        f"🌐 API URL:\n{Config.MIMO_API_URL}",
+        f"🧠 Model: `{Config.MIMO_MODEL}`\n"
+        f"💬 Memory: {len(memory[uid])}",
         parse_mode="Markdown"
     )
 

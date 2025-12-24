@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-بوت تلغرام ذكي مع Mimo AI
-إصدار مستقر ومدمج بالكامل
+بوت تلغرام مع Xiaomi Mimo AI
+إصدار كامل ومستقر
 """
 
 import os
 import sys
+import json
 import logging
 import asyncio
-from typing import Optional
 from datetime import datetime
+from typing import Optional
 
 # مكتبات Telegram
 from telegram import Update, BotCommand
@@ -24,7 +25,7 @@ from telegram.ext import (
 
 # مكتبات الإنترنت
 import aiohttp
-import json
+import requests
 
 # ====================== إعدادات التسجيل ======================
 logging.basicConfig(
@@ -32,30 +33,29 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('bot.log', encoding='utf-8')
+        logging.FileHandler('mimo_bot.log', encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
 
-# ====================== الإعدادات ======================
+# ====================== إعدادات التطبيق ======================
 class Config:
-    """إعدادات التطبيق"""
+    """إعدادات Mimo AI Bot"""
     
-    # مفاتيح API (من متغيرات البيئة أولاً)
-    TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8087198006:AAH-7gvmZVbJ6oAVVXFlN1WxlU9jguEJMPU")
-    MIMO_API_KEY = os.environ.get("MIMO_AI_API_KEY", "sk-sov58487uq7vxn9ytw1xedvbvpgss6crm3if4nq4qqapr4cw")
+    # 🔑 مفاتيح API (من متغيرات البيئة)
+    TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    MIMO_API_KEY = os.environ.get("MIMO_AI_API_KEY", "")
     
-    # روابط API
-    MIMO_API_URL = os.environ.get("MIMO_AI_API_URL", "https://api.mimo.ai/v1/chat/completions")
-    TELEGRAM_API = "https://api.telegram.org/bot"
+    # 🌐 روابط API
+    MIMO_API_URL = os.environ.get("MIMO_AI_API_URL", "https://api.xiaomimimo.com/v1/chat/completions")
     
-    # إعدادات Railway
+    # ⚙️ إعدادات Railway
     PORT = int(os.environ.get("PORT", 8080))
     PUBLIC_URL = os.environ.get("RAILWAY_STATIC_URL", "") or os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
     
-    # إعدادات البوت
+    # 📏 إعدادات البوت
     BOT_USERNAME = "@darck_ai_bot"
-    MAX_MESSAGE_LENGTH = 4096
+    MAX_MESSAGE_LENGTH = 4000
     REQUEST_TIMEOUT = 30
     
     @classmethod
@@ -63,11 +63,11 @@ class Config:
         """التحقق من صحة الإعدادات"""
         errors = []
         
-        if not cls.TELEGRAM_TOKEN or cls.TELEGRAM_TOKEN == "ضع_مفتاح_البوت_هنا":
-            errors.append("❌ لم يتم تعيين TELEGRAM_BOT_TOKEN")
+        if not cls.TELEGRAM_TOKEN:
+            errors.append("❌ TELEGRAM_BOT_TOKEN غير مضبوط")
         
-        if not cls.MIMO_API_KEY or cls.MIMO_API_KEY == "ضع_مفتاح_Mimo_هنا":
-            errors.append("⚠️ لم يتم تعيين MIMO_AI_API_KEY")
+        if not cls.MIMO_API_KEY:
+            errors.append("❌ MIMO_AI_API_KEY غير مضبوط")
         
         if errors:
             for error in errors:
@@ -77,395 +77,420 @@ class Config:
         logger.info("✅ جميع الإعدادات صحيحة")
         return True
 
-# ====================== دوال المساعدة ======================
+# ====================== دوال مساعدة ======================
 class Helper:
-    """دوال المساعدة العامة"""
+    """أدوات مساعدة"""
     
     @staticmethod
-    async def split_long_message(text: str, max_length: int = 4000):
+    def split_message(text: str, max_len: int = 4000):
         """تقسيم الرسائل الطويلة"""
-        if len(text) <= max_length:
+        if len(text) <= max_len:
             return [text]
         
         parts = []
         while text:
-            if len(text) <= max_length:
+            if len(text) <= max_len:
                 parts.append(text)
                 break
             
-            # البحث عن آخر مسافة للقطع
-            split_index = text[:max_length].rfind(' ')
-            if split_index == -1:
-                split_index = max_length
+            split_at = text[:max_len].rfind('\n')
+            if split_at == -1:
+                split_at = text[:max_len].rfind(' ')
+            if split_at == -1:
+                split_at = max_len
             
-            parts.append(text[:split_index])
-            text = text[split_index:].strip()
+            parts.append(text[:split_at])
+            text = text[split_at:].strip()
         
         return parts
     
     @staticmethod
-    def get_current_time():
-        """الحصول على الوقت الحالي"""
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    @staticmethod
-    async def internet_available():
-        """التحقق من اتصال الإنترنت"""
+    async def check_internet():
+        """فحص اتصال الإنترنت"""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get("https://api.telegram.org", timeout=5) as response:
-                    return response.status == 200
+                async with session.get("https://api.telegram.org", timeout=5):
+                    return True
         except:
             return False
 
 # ====================== معالجات الأوامر ======================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة أمر /start"""
+    """أمر /start"""
     user = update.effective_user
     
-    welcome_text = f"""
-🎉 **مرحباً {user.first_name}!**
+    welcome = f"""
+🌟 **مرحباً {user.first_name}!**
 
-أنا **Darck AI**، بوت الذكاء الاصطناعي المتطور.
+🤖 **أنا بوت Mimo AI الذكي**
+مدعوم من تقنية Xiaomi Mimo AI المتقدمة.
 
-✨ **الميزات:**
-• محادثات ذكية مع Mimo AI
-• دعم اللغة العربية
-• سرعة في الرد
-• تشفير آمن
+✨ **ماذا أستطيع فعل؟:**
+• محادثات ذكية بالعربية
+• إجابة على أسئلتك
+• مساعدة في المهام اليومية
+• تعلم وشرح المواضيع
 
 🔧 **الأوامر المتاحة:**
 /start - بدء المحادثة
-/help - عرض المساعدة
+/help - المساعدة
 /status - حالة النظام
-/about - معلومات عن البوت
-/settings - الإعدادات (قريباً)
+/test - اختبار الاتصال
+/about - معلومات
 
 📝 **كيفية الاستخدام:**
-فقط أرسل رسالة وسأرد عليك فوراً!
+فقط أرسل رسالة وسأرد عليك!
 
-⚡ **الحالة:** {Helper.get_current_time()}
+⚡ **معلومات النظام:**
+• وقت التشغيل: {datetime.now().strftime('%H:%M:%S')}
+• الإصدار: 2.0.0
 """
     
-    await update.message.reply_text(welcome_text, parse_mode='Markdown')
-    
-    # تسجيل دخول المستخدم
-    logger.info(f"مستخدم جديد: {user.id} - {user.username or 'بدون اسم'}")
+    await update.message.reply_text(welcome, parse_mode='Markdown')
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة أمر /help"""
+    """أمر /help"""
     help_text = """
-📚 **دليل المستخدم الكامل**
+📚 **دليل استخدام Mimo AI Bot**
 
-🔹 **الأوامر الأساسية:**
+🔹 **الأوامر الرئيسية:**
 /start - بدء المحادثة
 /help - عرض هذه الرسالة
 /status - حالة النظام والخوادم
+/test - اختبار اتصال Mimo AI
 /about - معلومات عن البوت
-/ping - اختبار سرعة الاستجابة
+/ping - قياس سرعة الاستجابة
 
-🔹 **الميزات المتقدمة:**
-• محادثات ذكية باللغة العربية
-• دعم الرسائل الطويلة
-• حفظ سياق المحادثة
-• معالجة الأخطاء التلقائية
+🔹 **ميزات البوت:**
+• محادثات ذكية مع Mimo AI
+• دعم اللغة العربية الكامل
+• معالجة الرسائل الطويلة
+• استجابة سريعة
+• تسجيل الأخطاء التلقائي
 
 🔹 **نصائح للاستخدام:**
-1. استخدم جمل كاملة للحصول على ردود أفضل
+1. استخدم جمل كاملة للردود الأفضل
 2. يمكنك السؤال عن أي موضوع
-3. البوت يدعم التنسيق النصي الأساسي
-4. الردود تستغرق من 2-5 ثوانٍ
+3. الردود تأخذ 2-3 ثوانٍ
+4. للأسئلة الطويلة، قسمها
 
 🔹 **الدعم التقني:**
-في حال وجود مشاكل:
-1. تحقق من اتصال الإنترنت
+إذا واجهت مشاكل:
+1. استخدم /test لفحص الاتصال
 2. استخدم /status للتحقق
 3. أعد إرسال الرسالة
 4. تواصل مع المطور
 
-🛠️ **الإصدار:** 2.0.0
-📅 **آخر تحديث:** 2024-12-24
+🛠️ **إصدار:** 2.0.0
+📅 **التحديث:** 2024-12-24
 """
     
     await update.message.reply_text(help_text)
 
 
-async def status_command(update: Update, context: CallbackContext):
-    """معالجة أمر /status"""
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر /status"""
     
-    # جمع معلومات النظام
-    status_info = []
+    status_lines = []
+    status_lines.append("📊 **حالة نظام Mimo AI Bot**")
+    status_lines.append(f"🕐 الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # حالة البوت الأساسية
-    status_info.append("📊 **حالة النظام**")
-    status_info.append(f"🕐 الوقت: {Helper.get_current_time()}")
+    # فحص اتصال الإنترنت
+    internet_ok = await Helper.check_internet()
+    status_lines.append(f"🌐 الإنترنت: {'✅ متصل' if internet_ok else '❌ غير متصل'}")
     
-    # حالة اتصال الإنترنت
-    internet_status = await Helper.internet_available()
-    status_info.append(f"🌐 الإنترنت: {'✅ متصل' if internet_status else '❌ غير متصل'}")
+    # فحص Telegram
+    status_lines.append(f"🤖 Telegram API: ✅ نشط")
     
-    # حالة Mimo AI
-    if Config.MIMO_API_KEY and Config.MIMO_API_KEY != "ضع_مفتاح_Mimo_هنا":
-        status_info.append("🤖 Mimo AI: ✅ متاح")
+    # فحص Mimo AI
+    if Config.MIMO_API_KEY:
+        if Config.MIMO_API_KEY.startswith('sk-'):
+            status_lines.append("🔑 Mimo API Key: ✅ صالح")
+        else:
+            status_lines.append("🔑 Mimo API Key: ⚠️ غير صالح")
     else:
-        status_info.append("🤖 Mimo AI: ⚠️ غير مضبوط")
+        status_lines.append("🔑 Mimo API Key: ❌ غير مضبوط")
     
     # حالة Railway
     if Config.PUBLIC_URL:
-        status_info.append(f"🚄 Railway: ✅ {Config.PUBLIC_URL[:30]}...")
+        status_lines.append(f"🚄 Railway: ✅ نشط ({Config.PUBLIC_URL[:30]}...)")
     else:
-        status_info.append("🚄 Railway: ⚠️ وضع التطوير")
+        status_lines.append("🚄 Railway: 🔧 وضع التطوير")
     
-    # حالة الذاكرة
-    import psutil
-    memory = psutil.virtual_memory()
-    status_info.append(f"💾 الذاكرة: {memory.percent}% مستخدم")
+    # معلومات إضافية
+    status_lines.append(f"📡 API URL: {Config.MIMO_API_URL}")
+    status_lines.append(f"🔢 Port: {Config.PORT}")
     
-    # حالة التحديثات
-    status_info.append(f"📈 الرسائل المعالجة: {len(context.chat_data.get('messages', [])) if context.chat_data else 0}")
+    await update.message.reply_text("\n".join(status_lines), parse_mode='Markdown')
+
+
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر /test لاختبار Mimo AI"""
     
-    # إرسال الرسالة
-    status_text = "\n".join(status_info)
-    await update.message.reply_text(status_text, parse_mode='Markdown')
+    test_msg = await update.message.reply_text("🔍 **جاري اختبار اتصال Mimo AI...**")
+    
+    results = []
+    
+    # 1. اختبار اتصال الإنترنت
+    try:
+        response = requests.get("https://api.xiaomimimo.com", timeout=5)
+        results.append("✅ **الخادم متاح:** يمكن الوصول إلى api.xiaomimimo.com")
+    except:
+        results.append("❌ **الخادم غير متاح:** لا يمكن الوصول إلى Mimo AI")
+    
+    # 2. اختبار API بالمفتاح
+    if Config.MIMO_API_KEY:
+        results.append(f"✅ **المفتاح مضبوط:** {Config.MIMO_API_KEY[:10]}...")
+        
+        # اختبار طلب فعلي
+        try:
+            test_response = await call_mimo_ai("مرحباً، هذا اختبار. هل تعمل؟")
+            if test_response and "خطأ" not in test_response:
+                results.append(f"✅ **الاتصال ناجح:** {test_response[:50]}...")
+            else:
+                results.append(f"❌ **الاتصال فاشل:** {test_response}")
+        except Exception as e:
+            results.append(f"❌ **خطأ في الاختبار:** {str(e)}")
+    else:
+        results.append("❌ **المفتاح غير مضبوط:** اضبط MIMO_AI_API_KEY")
+    
+    # 3. اختبار Telegram
+    results.append("✅ **Telegram Bot:** نشط ومستجيب")
+    
+    await test_msg.edit_text(
+        "🧪 **نتائج اختبار Mimo AI:**\n\n" + "\n\n".join(results),
+        parse_mode='Markdown'
+    )
 
 
 async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة أمر /about"""
+    """أمر /about"""
+    
     about_text = """
-🤖 **Darck AI Bot**
+🤖 **Mimo AI Telegram Bot**
 
-**وصف:**
-بوت تلغرام ذكي يعمل بالذكاء الاصطناعي من Mimo AI.
-مصمم خصيصاً للمحادثات الذكية باللغة العربية.
+**الوصف:**
+بوت ذكاء اصطناعي متقدم يعمل بتقنية Xiaomi Mimo AI.
+مصمم لتقديم تجربة محادثة ذكية وسلسة باللغة العربية.
 
-**الميزات:**
-• محرك Mimo AI المتقدم
-• دعم اللغة العربية الكامل
+**المميزات:**
+• محرك Mimo AI المتطور من Xiaomi
+• دعم اللغة العربية الفصيحة
 • تصميم سريع ومستقر
-• تشفير آمن للبيانات
-• معالجة ذكية للرسائل
+• معالجة ذكية للسياق
+• واجهة سهلة الاستخدام
 
-**التقنيات المستخدمة:**
+**التقنيات:**
 • Python 3.11+
 • python-telegram-bot 21.7
-• Mimo AI API
-• Railway للاستضافة
+• Xiaomi Mimo AI API
+• Railway للاستضافة السحابية
+
+**الخصوصية:**
+• لا يتم حفظ محادثاتك
+• تشفير آمن للبيانات
+• عدم مشاركة المعلومات
 
 **المطور:**
-تم تطويره بواسطة فريق Darck AI
-لتقديم تجربة محادثة استثنائية.
+فريق Darck AI
+للاستفسارات: @darck_ai_bot
 
-📞 **للتواصل والدعم:**
-@darck_ai_bot
-
-📄 **الرخصة:**
-مشروع مفتوح المصدر للأغراض التعليمية.
+**الرخصة:**
+مشروع تعليمي مفتوح المصدر.
 
 ✨ **شعارنا:**
-ذكاء اصطناعي بلمسة إنسانية!
+تكنولوجيا ذكية لخدمة الإنسان!
 """
     
     await update.message.reply_text(about_text)
 
 
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة أمر /ping"""
+    """أمر /ping"""
     start_time = datetime.now()
-    message = await update.message.reply_text("🏓 بينج...")
+    msg = await update.message.reply_text("🏓 بينج...")
     end_time = datetime.now()
     
-    response_time = (end_time - start_time).total_seconds() * 1000
+    latency = (end_time - start_time).total_seconds() * 1000
     
-    await message.edit_text(f"🏓 بونج!\n⚡ وقت الاستجابة: {response_time:.2f} مللي ثانية")
-
+    await msg.edit_text(f"🏓 بونج!\n⚡ سرعة الاستجابة: {latency:.0f} مللي ثانية")
 
 # ====================== Mimo AI Integration ======================
-class MimoAI:
-    """فئة للتعامل مع Mimo AI API"""
+async def call_mimo_ai(prompt: str) -> str:
+    """الاتصال بـ Xiaomi Mimo AI API"""
     
-    @staticmethod
-    async def generate_response(prompt: str) -> str:
-        """إنشاء رد باستخدام Mimo AI"""
-        
-        # التحقق من المفتاح
-        if not Config.MIMO_API_KEY or Config.MIMO_API_KEY == "ضع_مفتاح_Mimo_هنا":
-            return "⚠️ عذراً، لم يتم ضبط مفتاح Mimo AI API.\nيرجى التحقق من الإعدادات."
-        
-        # إعدادات الطلب
-        headers = {
-            "Authorization": f"Bearer {Config.MIMO_API_KEY}",
-            "Content-Type": "application/json",
-            "User-Agent": "Darck-AI-Bot/2.0.0"
-        }
-        
-        # بناء البيانات
-        data = {
-            "model": "gpt-4",  # أو أي نموذج تدعمه Mimo AI
+    if not Config.MIMO_API_KEY:
+        return "❌ خطأ: لم يتم تعيين مفتاح Mimo AI API"
+    
+    headers = {
+        "Authorization": f"Bearer {Config.MIMO_API_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+    
+    # جرب عدة هياكل بيانات (Xiaomi Mimo قد يستخدم هيكلاً مختلفاً)
+    data_attempts = [
+        # المحاولة 1: هيكل OpenAI-like (الأكثر شيوعاً)
+        {
+            "model": "mimo-ai",
             "messages": [
-                {
-                    "role": "system",
-                    "content": """أنت مساعد ذكي يتحدث العربية بطلاقة.
-                    يجب أن تكون ردودك مفيدة ودقيقة وودية.
-                    استخدم تنسيق Markdown البسيط عند الحاجة.
-                    إذا لم تعرف إجابة، قل ذلك بصراحة.
-                    حافظ على الردود باللغة العربية ما لم يطلب خلاف ذلك."""
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+                {"role": "user", "content": prompt}
             ],
-            "max_tokens": 1000,
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "frequency_penalty": 0.1,
-            "presence_penalty": 0.1
-        }
+            "max_tokens": 800,
+            "temperature": 0.7
+        },
         
+        # المحاولة 2: هيكل بديل
+        {
+            "prompt": prompt,
+            "model": "xiaomi-mimo",
+            "max_tokens": 800,
+            "temperature": 0.7
+        },
+        
+        # المحاولة 3: هيكل مبسط
+        {
+            "input": prompt,
+            "parameters": {
+                "max_tokens": 800,
+                "temperature": 0.7
+            }
+        }
+    ]
+    
+    for attempt_num, data in enumerate(data_attempts, 1):
         try:
-            logger.info(f"إرسال طلب إلى Mimo AI: {prompt[:50]}...")
+            logger.info(f"🔧 محاولة {attempt_num} مع هيكل: {json.dumps(data)[:100]}...")
             
-            # إرسال الطلب
-            timeout = aiohttp.ClientTimeout(total=Config.REQUEST_TIMEOUT)
+            connector = aiohttp.TCPConnector(ssl=False)
             
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.post(
                     Config.MIMO_API_URL,
                     headers=headers,
                     json=data,
-                    ssl=False  # قد تحتاج لتفعيله في الإنتاج
+                    timeout=Config.REQUEST_TIMEOUT
                 ) as response:
                     
-                    # تسجيل الاستجابة
-                    logger.info(f"استجابة Mimo AI: {response.status}")
+                    logger.info(f"📡 الاستجابة: {response.status}")
                     
                     if response.status == 200:
                         result = await response.json()
+                        logger.info(f"📦 نتيجة API: {json.dumps(result)[:200]}...")
                         
-                        # تحليل الاستجابة (تعديل حسب هيكل Mimo AI)
-                        try:
-                            if "choices" in result:
-                                message_content = result["choices"][0]["message"]["content"]
-                            elif "text" in result:
-                                message_content = result["text"]
-                            elif "response" in result:
-                                message_content = result["response"]
-                            else:
-                                message_content = str(result)[:500]
-                            
-                            return message_content.strip()
-                            
-                        except (KeyError, IndexError) as e:
-                            logger.error(f"خطأ في تحليل الرد: {e}")
-                            return "⚠️ حدث خطأ في معالجة الاستجابة. يرجى المحاولة مرة أخرى."
+                        # محاولة استخراج النص بطرق مختلفة
+                        if "choices" in result and result["choices"]:
+                            return result["choices"][0].get("message", {}).get("content", "رد فارغ")
+                        elif "text" in result:
+                            return result["text"]
+                        elif "response" in result:
+                            return result["response"]
+                        elif "result" in result:
+                            return result["result"]
+                        else:
+                            # إذا فشل كل شيء، ارجع النتيجة كاملة للتشخيص
+                            return f"رد AI: {json.dumps(result)[:500]}"
+                    
+                    elif response.status == 400:
+                        error_data = await response.text()
+                        logger.warning(f"⚠️ خطأ 400 في المحاولة {attempt_num}: {error_data[:200]}")
+                        continue  # جرب الهيكل التالي
                     
                     elif response.status == 401:
-                        return "❌ خطأ في المصادقة. يرجى التحقق من مفتاح API."
+                        return "❌ مفتاح API غير صالح أو منتهي الصلاحية"
                     
                     elif response.status == 429:
-                        return "⚠️ تجاوز الحد المسموح. يرجى الانتظار قليلاً."
-                    
-                    elif response.status == 503:
-                        return "🔧 الخدمة غير متاحة حالياً. يرجى المحاولة لاحقاً."
+                        return "⚠️ تجاوزت الحد المسموح، حاول مرة أخرى لاحقاً"
                     
                     else:
                         error_text = await response.text()
-                        logger.error(f"خطأ API: {response.status} - {error_text[:200]}")
-                        return f"⚠️ خطأ في الخادم (رمز {response.status})"
-
-        except asyncio.TimeoutError:
-            logger.error("انتهت مهلة طلب Mimo AI")
-            return "⏰ انتهت مهلة الطلب. يرجى المحاولة مرة أخرى."
+                        logger.error(f"❌ خطأ {response.status}: {error_text[:200]}")
+                        continue
+                        
+        except aiohttp.ClientConnectorError as e:
+            logger.error(f"❌ خطأ اتصال: {e}")
+            return "🌐 لا يمكن الوصول إلى خادم Mimo AI"
         
-        except aiohttp.ClientError as e:
-            logger.error(f"خطأ اتصال: {e}")
-            return "🌐 مشكلة في الاتصال بالخادم. تحقق من اتصال الإنترنت."
+        except asyncio.TimeoutError:
+            logger.error("⏰ انتهت مهلة الاتصال")
+            return "⏰ انتهت مهلة الطلب، حاول مرة أخرى"
         
         except Exception as e:
-            logger.error(f"خطأ غير متوقع: {e}")
-            return f"⚠️ حدث خطأ غير متوقع: {str(e)[:100]}"
-
+            logger.error(f"❌ خطأ غير متوقع: {e}")
+            continue
+    
+    return "❌ فشلت جميع محاولات الاتصال مع Mimo AI"
 
 # ====================== معالجة الرسائل ======================
-async def handle_message(update: Update, context: CallbackContext):
-    """معالجة جميع الرسائل النصية"""
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة الرسائل النصية من المستخدمين"""
     
-    # التحقق من الرسالة
     if not update.message or not update.message.text:
         return
     
     user = update.effective_user
-    chat_id = update.effective_chat.id
     message_text = update.message.text.strip()
     
-    # تسجيل الرسالة
-    logger.info(f"رسالة من {user.id}: {message_text[:100]}...")
-    
-    # تجاهل الأوامر (تم معالجتها بواسطة handlers)
-    if message_text.startswith('/'):
+    # تجاهل الرسائل الفارغة أو الأوامر
+    if not message_text or message_text.startswith('/'):
         return
     
-    # التحقق من الرسائل الطويلة جداً
+    logger.info(f"📩 رسالة من {user.id}: {message_text[:100]}...")
+    
+    # التحقق من طول الرسالة
     if len(message_text) > 2000:
-        await update.message.reply_text("📝 الرسالة طويلة جداً. يرجى اختصارها إلى أقل من 2000 حرف.")
+        await update.message.reply_text("📏 الرسالة طويلة جداً. يرجى اختصارها.")
         return
     
     # إرسال رسالة الانتظار
     try:
-        wait_message = await update.message.reply_text("🤔 **جاري التفكير...**")
-    except Exception as e:
-        logger.error(f"خطأ في إرسال رسالة الانتظار: {e}")
-        wait_message = None
+        wait_msg = await update.message.reply_text("🤔 **جاري التفكير...**")
+    except:
+        wait_msg = None
     
-    # الحصول على الرد من AI
     try:
-        ai_response = await MimoAI.generate_response(message_text)
+        # الحصول على الرد من Mimo AI
+        ai_response = await call_mimo_ai(message_text)
         
         # حذف رسالة الانتظار
-        if wait_message:
+        if wait_msg:
             try:
-                await wait_message.delete()
+                await wait_msg.delete()
             except:
                 pass
         
         # إرسال الرد
         if ai_response:
             # تقسيم الرد إذا كان طويلاً
-            response_parts = await Helper.split_long_message(ai_response)
+            response_parts = Helper.split_message(ai_response)
             
             for i, part in enumerate(response_parts):
                 try:
                     if i == 0:
-                        await update.message.reply_text(part, parse_mode='Markdown')
+                        await update.message.reply_text(part)
                     else:
                         await context.bot.send_message(
-                            chat_id=chat_id,
-                            text=part,
-                            parse_mode='Markdown'
+                            chat_id=update.effective_chat.id,
+                            text=part
                         )
+                    
+                    # تأخير بسيط بين الرسائل
+                    if i < len(response_parts) - 1:
+                        await asyncio.sleep(0.5)
+                        
                 except Exception as e:
-                    logger.error(f"خطأ في إرسال جزء الرد: {e}")
-                    # المحاولة بدون Markdown
-                    try:
-                        if i == 0:
-                            await update.message.reply_text(part)
-                        else:
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text=part
-                            )
-                    except:
-                        await update.message.reply_text("⚠️ حدث خطأ في إرسال الرد.")
+                    logger.error(f"❌ خطأ في إرسال جزء الرد: {e}")
+        
         else:
-            await update.message.reply_text("⚠️ لم يتم استلام رد من الذكاء الاصطناعي.")
+            await update.message.reply_text("⚠️ لم أتلقى رداً من الذكاء الاصطناعي.")
     
     except Exception as e:
-        logger.error(f"خطأ في معالجة الرسالة: {e}")
+        logger.error(f"❌ خطأ في معالجة الرسالة: {e}")
         
-        if wait_message:
+        if wait_msg:
             try:
-                await wait_message.edit_text("❌ حدث خطأ في المعالجة. يرجى المحاولة مرة أخرى.")
+                await wait_msg.edit_text("❌ حدث خطأ في المعالجة. يرجى المحاولة مرة أخرى.")
             except:
                 await update.message.reply_text("❌ حدث خطأ في المعالجة. يرجى المحاولة مرة أخرى.")
 
@@ -473,49 +498,45 @@ async def handle_message(update: Update, context: CallbackContext):
 async def error_handler(update: object, context: CallbackContext):
     """معالجة الأخطاء العامة"""
     try:
-        logger.error(f"حدث خطأ: {context.error}", exc_info=True)
+        logger.error(f"🚨 خطأ غير معالج: {context.error}", exc_info=True)
         
-        # يمكنك إضافة منطق إرسال الأخطاء إلى المدير هنا
-        error_msg = f"⚠️ خطأ في النظام: {str(context.error)[:200]}"
-        
-        # إرسال رسالة خطأ للمستخدم إذا كان هناك update
+        # إرسال رسالة خطأ للمستخدم إذا أمكن
         if isinstance(update, Update) and update.effective_message:
             try:
                 await update.effective_message.reply_text(
-                    "عذراً، حدث خطأ تقني. يرجى المحاولة مرة أخرى لاحقاً."
+                    "⚠️ عذراً، حدث خطأ تقني. يرجى المحاولة مرة أخرى لاحقاً."
                 )
             except:
                 pass
                 
     except Exception as e:
-        logger.error(f"خطأ في معالج الأخطاء نفسه: {e}")
-
+        logger.error(f"❌ خطأ في معالج الأخطاء نفسه: {e}")
 
 # ====================== إعدادات البوت ======================
 async def setup_bot_commands(application: Application):
-    """إعداد أوامر القائمة للبوت"""
+    """إعداد قائمة الأوامر للبوت"""
     commands = [
         BotCommand("start", "بدء المحادثة"),
         BotCommand("help", "عرض التعليمات"),
         BotCommand("status", "حالة النظام"),
+        BotCommand("test", "اختبار اتصال Mimo AI"),
         BotCommand("about", "معلومات عن البوت"),
-        BotCommand("ping", "اختبار الاستجابة"),
+        BotCommand("ping", "قياس سرعة الاستجابة"),
     ]
     
     try:
         await application.bot.set_my_commands(commands)
         logger.info("✅ تم إعداد أوامر البوت")
     except Exception as e:
-        logger.error(f"خطأ في إعداد أوامر البوت: {e}")
-
+        logger.error(f"❌ خطأ في إعداد أوامر البوت: {e}")
 
 # ====================== الدالة الرئيسية ======================
 def main():
     """الدالة الرئيسية لتشغيل البوت"""
     
-    logger.info("=" * 50)
-    logger.info("🚀 بدء تشغيل Darck AI Bot")
-    logger.info("=" * 50)
+    logger.info("=" * 60)
+    logger.info("🚀 بدء تشغيل Mimo AI Telegram Bot")
+    logger.info("=" * 60)
     
     # التحقق من الإعدادات
     if not Config.validate():
@@ -526,13 +547,13 @@ def main():
         # إنشاء تطبيق البوت
         application = Application.builder().token(Config.TELEGRAM_TOKEN).build()
         
-        # إعداد المعالجات
+        # إضافة معالجات الأوامر
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("status", status_command))
+        application.add_handler(CommandHandler("test", test_command))
         application.add_handler(CommandHandler("about", about_command))
         application.add_handler(CommandHandler("ping", ping_command))
-        application.add_handler(CommandHandler("settings", help_command))  # مؤقت
         
         # معالجة الرسائل النصية
         application.add_handler(MessageHandler(
@@ -562,7 +583,7 @@ def main():
             )
         else:
             # وضع Polling للتطوير
-            logger.info("🔧 استخدام وضع Polling للتطوير")
+            logger.info("🔧 استخدام وضع Polling (التطوير)")
             application.run_polling(
                 poll_interval=1.0,
                 timeout=30,
@@ -573,7 +594,6 @@ def main():
     except Exception as e:
         logger.error(f"❌ فشل تشغيل البوت: {e}", exc_info=True)
         sys.exit(1)
-
 
 # ====================== نقطة الدخول ======================
 if __name__ == "__main__":

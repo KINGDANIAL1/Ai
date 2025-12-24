@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Mimo AI Telegram Bot
-FINAL WORKING VERSION
+FINAL DEFINITIVE VERSION (messages-based)
 """
 
 import os
@@ -9,8 +9,8 @@ import sys
 import json
 import asyncio
 import logging
-from datetime import datetime
 from collections import defaultdict, deque
+from datetime import datetime
 
 import aiohttp
 from telegram import Update, BotCommand
@@ -39,7 +39,7 @@ class Config:
     MIMO_API_KEY = os.getenv("MIMO_AI_API_KEY")
     MIMO_API_URL = os.getenv("MIMO_AI_API_URL")
 
-    # ✅ model مطلوب إجباري
+    # جرّب تغييرها فقط إذا لزم
     MIMO_MODEL = os.getenv("MIMO_MODEL", "mimo-chat")
 
     PORT = int(os.getenv("PORT", 8080))
@@ -88,11 +88,16 @@ async def call_mimo_ai(user_id: int, prompt: str) -> str:
         "Accept": "application/json"
     }
 
+    # 🧠 بناء messages كما يطلب Mimo
+    messages = list(memory[user_id])
+    messages.append({
+        "role": "user",
+        "content": prompt
+    })
+
     payload = {
-        "model": Config.MIMO_MODEL,   # ✅ الحل هنا
-        "prompt": prompt,
-        "max_tokens": 800,
-        "temperature": 0.7
+        "model": Config.MIMO_MODEL,
+        "messages": messages
     }
 
     try:
@@ -116,15 +121,23 @@ async def call_mimo_ai(user_id: int, prompt: str) -> str:
 
                 data = json.loads(raw)
 
-                reply = (
-                    data.get("response")
-                    or data.get("result")
-                    or data.get("text")
-                    or data.get("choices", [{}])[0].get("text")
-                )
+                # استخراج الرد
+                reply = None
+                if "choices" in data:
+                    reply = data["choices"][0]["message"]["content"]
+                elif "response" in data:
+                    reply = data["response"]
+                elif "result" in data:
+                    reply = data["result"]
 
                 if not reply:
                     return f"⚠️ API Response:\n{json.dumps(data, ensure_ascii=False, indent=2)[:800]}"
+
+                # حفظ الرد في الذاكرة
+                memory[user_id].append({
+                    "role": "assistant",
+                    "content": reply
+                })
 
                 return reply.strip()
 

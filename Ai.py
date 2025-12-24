@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Mimo AI Telegram Bot
-FINAL DEFINITIVE VERSION (messages-based)
+Xiaomi MiMo AI Telegram Bot
+Built on official MiMo API behavior
 """
 
 import os
@@ -31,36 +31,28 @@ logging.basicConfig(
         logging.FileHandler("mimo_bot.log", encoding="utf-8")
     ]
 )
-logger = logging.getLogger("MimoBot")
+logger = logging.getLogger("MiMoBot")
 
 # ====================== Config ======================
 class Config:
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    MIMO_API_KEY = os.getenv("MIMO_AI_API_KEY")
-    MIMO_API_URL = os.getenv("MIMO_AI_API_URL")
+    MIMO_API_KEY = os.getenv("MIMO_API_KEY")
 
-    # جرّب تغييرها فقط إذا لزم
-    MIMO_MODEL = os.getenv("MIMO_MODEL", "mimo-chat")
+    # ✅ Official endpoint + model
+    MIMO_API_URL = "https://api.xiaomimimo.com/v1/chat/completions"
+    MIMO_MODEL = "mimo-v2-flash"
 
     PORT = int(os.getenv("PORT", 8080))
     PUBLIC_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
 
     TIMEOUT = 30
     MAX_INPUT = 2000
-    MAX_HISTORY = 6
+    MAX_HISTORY = 8
 
     @classmethod
     def validate(cls):
-        missing = []
-        if not cls.TELEGRAM_TOKEN:
-            missing.append("TELEGRAM_BOT_TOKEN")
-        if not cls.MIMO_API_KEY:
-            missing.append("MIMO_AI_API_KEY")
-        if not cls.MIMO_API_URL:
-            missing.append("MIMO_AI_API_URL")
-
-        if missing:
-            logger.error(f"❌ Missing env vars: {', '.join(missing)}")
+        if not cls.TELEGRAM_TOKEN or not cls.MIMO_API_KEY:
+            logger.error("❌ Missing TELEGRAM_TOKEN or MIMO_API_KEY")
             return False
         return True
 
@@ -80,15 +72,13 @@ def split_message(text: str, limit=4000):
     parts.append(text)
     return parts
 
-# ====================== Mimo AI Client ======================
+# ====================== MiMo API ======================
 async def call_mimo_ai(user_id: int, prompt: str) -> str:
     headers = {
-        "Authorization": f"Bearer {Config.MIMO_API_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json"
+        "api-key": Config.MIMO_API_KEY,   # ✅ correct header
+        "Content-Type": "application/json"
     }
 
-    # 🧠 بناء messages كما يطلب Mimo
     messages = list(memory[user_id])
     messages.append({
         "role": "user",
@@ -110,30 +100,16 @@ async def call_mimo_ai(user_id: int, prompt: str) -> str:
             ) as resp:
 
                 raw = await resp.text()
-                logger.info(f"MIMO RAW [{resp.status}]: {raw[:300]}")
+                logger.info(f"MiMo [{resp.status}] {raw[:200]}")
 
                 if resp.status != 200:
-                    return (
-                        f"❌ Mimo API Error\n"
-                        f"Status: {resp.status}\n"
-                        f"Response:\n{raw[:500]}"
-                    )
+                    return f"❌ MiMo API Error ({resp.status})"
 
                 data = json.loads(raw)
 
-                # استخراج الرد
-                reply = None
-                if "choices" in data:
-                    reply = data["choices"][0]["message"]["content"]
-                elif "response" in data:
-                    reply = data["response"]
-                elif "result" in data:
-                    reply = data["result"]
+                reply = data["choices"][0]["message"]["content"]
 
-                if not reply:
-                    return f"⚠️ API Response:\n{json.dumps(data, ensure_ascii=False, indent=2)[:800]}"
-
-                # حفظ الرد في الذاكرة
+                # store assistant reply
                 memory[user_id].append({
                     "role": "assistant",
                     "content": reply
@@ -142,22 +118,19 @@ async def call_mimo_ai(user_id: int, prompt: str) -> str:
                 return reply.strip()
 
     except asyncio.TimeoutError:
-        return "⏰ انتهت مهلة الاتصال مع Mimo"
-    except aiohttp.ClientError as e:
-        logger.error(e)
-        return "🌐 فشل الاتصال بالخادم"
+        return "⏰ انتهت مهلة الاتصال"
+    except aiohttp.ClientError:
+        return "🌐 خطأ في الاتصال بالخادم"
     except Exception as e:
         logger.error(e, exc_info=True)
-        return "❌ خطأ داخلي غير متوقع"
+        return "❌ خطأ داخلي"
 
 # ====================== Commands ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 **Mimo AI Bot**\n\n"
-        "جاهز للعمل الآن ✅\n\n"
-        "📌 أوامر:\n"
+        "🤖 **Xiaomi MiMo AI Bot**\n\n"
+        "أرسل أي رسالة وسأرد عليك باستخدام MiMo.\n\n"
         "/status – حالة النظام\n"
-        "/test – اختبار الاتصال\n"
         "/reset – تصفير المحادثة",
         parse_mode="Markdown"
     )
@@ -171,11 +144,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💬 Memory: {len(memory[uid])}",
         parse_mode="Markdown"
     )
-
-async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("🧪 اختبار الاتصال مع Mimo...")
-    result = await call_mimo_ai(update.effective_user.id, "مرحبا، هل تعمل؟")
-    await msg.edit_text(f"🧪 النتيجة:\n\n{result}")
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memory[update.effective_user.id].clear()
@@ -217,7 +185,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("test", test))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
@@ -226,7 +193,6 @@ def main():
         await app.bot.set_my_commands([
             BotCommand("start", "بدء"),
             BotCommand("status", "حالة النظام"),
-            BotCommand("test", "اختبار الاتصال"),
             BotCommand("reset", "تصفير المحادثة"),
         ])
 

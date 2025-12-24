@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Professional Mimo AI Telegram Bot
-Production Ready
+Compatible + Diagnostic Version
 """
 
 import os
@@ -37,14 +37,14 @@ logger = logging.getLogger("MimoBot")
 class Config:
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     MIMO_API_KEY = os.getenv("MIMO_AI_API_KEY")
-    MIMO_API_URL = os.getenv("MIMO_AI_API_URL")  # REQUIRED
+    MIMO_API_URL = os.getenv("MIMO_AI_API_URL")
 
     PORT = int(os.getenv("PORT", 8080))
     PUBLIC_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
 
     TIMEOUT = 30
     MAX_INPUT = 2000
-    MAX_HISTORY = 8  # عدد الرسائل المحفوظة لكل مستخدم
+    MAX_HISTORY = 6
 
     @classmethod
     def validate(cls):
@@ -62,16 +62,16 @@ class Config:
         return True
 
 # ====================== Memory ======================
-chat_memory: dict[int, deque] = defaultdict(
+memory: dict[int, deque] = defaultdict(
     lambda: deque(maxlen=Config.MAX_HISTORY)
 )
 
 # ====================== Utils ======================
-def split_message(text: str, max_len=4000):
+def split_message(text: str, limit=4000):
     parts = []
-    while len(text) > max_len:
-        cut = text[:max_len].rfind("\n")
-        cut = cut if cut != -1 else max_len
+    while len(text) > limit:
+        cut = text[:limit].rfind("\n")
+        cut = cut if cut != -1 else limit
         parts.append(text[:cut])
         text = text[cut:].strip()
     parts.append(text)
@@ -81,15 +81,13 @@ def split_message(text: str, max_len=4000):
 async def call_mimo_ai(user_id: int, prompt: str) -> str:
     headers = {
         "Authorization": f"Bearer {Config.MIMO_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Accept": "application/json"
     }
 
-    history = list(chat_memory[user_id])
-    history.append({"role": "user", "content": prompt})
-
+    # 🧠 أقل Payload ممكن (أعلى توافق)
     payload = {
-        "messages": history,
-        "max_new_tokens": 800
+        "text": prompt
     }
 
     try:
@@ -102,61 +100,72 @@ async def call_mimo_ai(user_id: int, prompt: str) -> str:
             ) as resp:
 
                 raw = await resp.text()
-                logger.info(f"MIMO {resp.status} | {raw[:150]}")
+                logger.info(f"MIMO RAW [{resp.status}]: {raw[:300]}")
 
+                # ❌ أي حالة غير 200 نُظهرها بوضوح
                 if resp.status != 200:
-                    return "❌ فشل الاتصال مع الذكاء الاصطناعي"
+                    return (
+                        f"❌ Mimo API Error\n"
+                        f"Status: {resp.status}\n"
+                        f"Response:\n{raw[:500]}"
+                    )
 
-                data = json.loads(raw)
+                # 🔍 محاولة parsing مرنة
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    return raw
 
                 reply = (
                     data.get("response")
                     or data.get("result")
                     or data.get("text")
+                    or data.get("answer")
                 )
 
                 if not reply:
-                    return "❌ رد غير مفهوم من الذكاء الاصطناعي"
-
-                # حفظ في الذاكرة
-                chat_memory[user_id].append(
-                    {"role": "assistant", "content": reply}
-                )
+                    return f"⚠️ API Response:\n{json.dumps(data, ensure_ascii=False, indent=2)[:800]}"
 
                 return reply
 
     except asyncio.TimeoutError:
-        return "⏰ انتهت مهلة الطلب"
+        return "⏰ انتهت مهلة الاتصال مع Mimo"
     except aiohttp.ClientError as e:
         logger.error(e)
-        return "🌐 خطأ في الاتصال بالخادم"
+        return "🌐 فشل الاتصال بالخادم"
     except Exception as e:
         logger.error(e, exc_info=True)
-        return "❌ خطأ داخلي"
+        return "❌ خطأ داخلي غير متوقع"
 
 # ====================== Commands ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 **Mimo AI Bot**\n\n"
-        "أرسل أي رسالة وسأرد عليك بذكاء.\n"
-        "يدعم العربية بالكامل.\n\n"
-        "📌 الأوامر:\n"
+        "أرسل أي رسالة وسأرد عليك.\n\n"
+        "📌 أوامر:\n"
         "/status – حالة النظام\n"
-        "/reset – تصفير المحادثة",
+        "/test – اختبار الاتصال\n"
+        "/reset – تصفير الذاكرة",
         parse_mode="Markdown"
     )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
     await update.message.reply_text(
         f"📊 **Status**\n\n"
         f"🕒 {datetime.now()}\n"
-        f"🔑 API: ✅\n"
-        f"💬 Memory: {len(chat_memory[update.effective_user.id])} رسائل",
+        f"💬 Memory: {len(memory[uid])}\n"
+        f"🌐 API URL:\n{Config.MIMO_API_URL}",
         parse_mode="Markdown"
     )
 
+async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🧪 اختبار الاتصال مع Mimo...")
+    result = await call_mimo_ai(update.effective_user.id, "مرحبا، هل تعمل؟")
+    await msg.edit_text(f"🧪 النتيجة:\n\n{result}")
+
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_memory[update.effective_user.id].clear()
+    memory[update.effective_user.id].clear()
     await update.message.reply_text("♻️ تم تصفير المحادثة")
 
 # ====================== Messages ======================
@@ -167,10 +176,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(text) > Config.MAX_INPUT:
         await update.message.reply_text("📏 الرسالة طويلة جداً")
         return
-
-    chat_memory[user.id].append(
-        {"role": "user", "content": text}
-    )
 
     wait = await update.message.reply_text("🤔 جاري التفكير...")
 
@@ -199,6 +204,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("test", test))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
@@ -207,6 +213,7 @@ def main():
         await app.bot.set_my_commands([
             BotCommand("start", "بدء"),
             BotCommand("status", "حالة النظام"),
+            BotCommand("test", "اختبار الاتصال"),
             BotCommand("reset", "تصفير المحادثة"),
         ])
 

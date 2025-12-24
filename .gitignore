@@ -15,3 +15,5 @@ instance/
 *.sqlite3
 secrets.py
 config.py
+bot.log
+*.env
